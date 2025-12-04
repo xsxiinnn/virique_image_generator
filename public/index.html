@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
-  <title>人生一格相機 · 1280×720 橫式</title>
+  <title>VIRIQUE</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <!-- QRCode 產生器 -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -203,13 +203,57 @@
     }
 
     .hidden { display: none !important; }
+
+    .outer-frame-section {
+      margin-top: 8px;
+    }
+
+    .outer-frame-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+      gap: 6px;
+      max-height: 180px;
+      overflow-y: auto;
+      padding: 6px;
+      background: #f1dec4;
+      border-radius: 12px;
+    }
+
+    /* 外框縮圖樣式，直接沿用 frame-item / frame-thumb 的風格 */
+    .outer-frame-grid .frame-item {
+      padding: 0;
+      border-radius: 12px;
+      background: #f9f0e3;
+      border: 2px solid transparent;
+      overflow: hidden;
+      cursor: pointer;
+    }
+
+    .outer-frame-grid .frame-thumb {
+      width: 100%;
+      aspect-ratio: 1280 / 1000;
+      background: #e7cfb0;
+      overflow: hidden;
+    }
+
+    .outer-frame-grid .frame-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .outer-frame-grid .frame-item.selected {
+      border-color: #8b5a2b;
+      box-shadow: 0 0 0 2px rgba(139,90,43,0.25);
+    }
   </style>
 </head>
 <body>
   <main>
     <!-- 上方設定區 -->
     <section>
-      <h1>人生一格相機 · 1280×720</h1>
+      <h1>VIRIQUE</h1>
 
       <!-- 1. 視覺化邊框選單 -->
       <div class="config-row">
@@ -254,14 +298,28 @@
 
       <!-- 右：合成結果 + 下載 + QR -->
       <div class="result">
-        <div style="font-size:0.9rem;margin-bottom:6px;">5. 合成後的照片（1280×720）</div>
+        <div style="font-size:0.9rem;margin-bottom:6px;">
+          5. 拍好的照片（會套用角色邊框 & 外框）
+        </div>
+
+        <!-- 用來存原始 1280x720 照片（不顯示） -->
+        <canvas id="baseCanvas" class="hidden"></canvas>
+
+        <!-- 最終 1280x1000 的預覽 -->
         <canvas id="finalCanvas"></canvas>
 
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-          <!-- 拍照完成後，這裡會顯示下載按鈕 -->
-          <a id="downloadLink" class="download-btn hidden" download="my-photo-1280x720.jpg">
-            6. 下載到本機
+        <!-- 6. 選擇外框樣式／顏色 -->
+        <div id="outerFrameSection" class="outer-frame-section hidden">
+          <div style="font-size:0.9rem;margin:8px 0 4px;">6. 選擇外框樣式</div>
+          <div id="outerFrameGrid" class="outer-frame-grid"></div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:8px;">
+          <!-- 下載：1280x1000 -->
+          <a id="downloadLink" class="download-btn hidden" download="my-photo-1280x1000.jpg">
+            7. 下載到本機
           </a>
+          <!-- qrcode下載：用雲端 1280x1000 圖片網址 -->
           <button id="qrBtn" type="button" class="qr-btn hidden">
             qrcode下載
           </button>
@@ -271,10 +329,8 @@
           </div>
         </div>
 
-        <div class="small-note" style="margin-top:6px;">7. 完成 ✅</div>
-        <div class="small-note" style="margin-top:4px;">
-          （目前 QR 直接包圖片 data URL，正式上線可改成放短網址）
-        </div>
+        <div class="small-note" style="margin-top:6px;">完成 ✅</div>
+      </div>
       </div>
     </section>
 
@@ -289,24 +345,39 @@
       const retakeBtn = document.getElementById('retakeBtn');
       const statusText = document.getElementById('statusText');
 
-      const finalCanvas = document.getElementById('finalCanvas');
+      const baseCanvas = document.getElementById('baseCanvas');   // 1280x720 (角色邊框版)
+      const finalCanvas = document.getElementById('finalCanvas'); // 1280x1000 (最終輸出)
+
       const downloadLink = document.getElementById('downloadLink');
-
-      const frameGrid = document.getElementById('frameGrid');
-      const frameSelectedText = document.getElementById('frameSelectedText');
-
       const qrBtn = document.getElementById('qrBtn');
       const qrWrapper = document.getElementById('qrWrapper');
       const qrcodeEl = document.getElementById('qrcode');
 
+      const frameGrid = document.getElementById('frameGrid');
+      const frameSelectedText = document.getElementById('frameSelectedText');
+
+      const outerFrameSection = document.getElementById('outerFrameSection');
+      const outerFrameGrid = document.getElementById('outerFrameGrid');
+
       let stream = null;
       let countdownSeconds = 3;
       let countdownTimer = null;
-      let framePath = '';
-      let lastPhotoDataUrl = '';      // 1280x720 大圖（下載用）
-      let lastPhotoUrlForQr = '';     // 後端回傳的圖片網址（給 QR 用）
 
-  /* 邊框檔案（路徑以 public 為根目錄） */
+      let framePath = '';              // 角色邊框（拍照前就選好的那個）
+      let basePhotoDataUrl = '';       // 1280x720 + 角色邊框
+      let selectedOuterFrame = null;   // { bottom, top, label }
+      let lastPhotoUrlForQr = '';      // 雲端 1280x1000 的網址
+
+      const PHOTO_W = 1280;
+      const PHOTO_H = 720;
+      const FINAL_W = 1280;
+      const FINAL_H = 1000;
+
+      // 在最終畫布裡照片要放的位置（你可以微調這兩個數字）
+      const PHOTO_X_ON_FINAL = 0;
+      const PHOTO_Y_ON_FINAL = 140; // 140 + 720 = 860，下面留 140px 給標語 / logo
+
+      /* 角色邊框（跟你原本的一樣） */
       const frames = [
         { src: 'frames/frame1.png', label: '角色 1' },
         { src: 'frames/frame2.png', label: '角色 2' },
@@ -322,6 +393,22 @@
         { src: 'frames/frame12.png', label: '角色 12' },
       ];
 
+      /* 外框樣式：每一個外框 = { bottom: 底框圖二, top: 頂框圖一 } */
+      const outerFrames = [
+        {
+          id: 'dark',
+          label: '咖啡色外框',
+          bottom: 'frames/outer_dark_bottom.png', // 圖二：1280x1000，含底色 & 底部文字
+          top: 'frames/outer_dark_top.png'        // 圖一：上方藍刷 + 角色三人，背景透明
+        },
+        {
+          id: 'light',
+          label: '白色外框',
+          bottom: 'frames/outer_light_bottom.png',
+          top: 'frames/outer_light_top.png'
+        },
+      ];
+
       function loadImage(src) {
         return new Promise((resolve, reject) => {
           const img = new Image();
@@ -331,7 +418,7 @@
         });
       }
 
-      // 建立縮圖選單
+      /* ========== UI 建立：角色邊框選單 ========== */
       function renderFrameGrid() {
         frameGrid.innerHTML = '';
         frames.forEach((frame, index) => {
@@ -368,7 +455,41 @@
         });
       }
 
-      // 啟動相機
+      /* ========== UI 建立：外框選單 ========== */
+      function renderOuterFrameGrid() {
+        outerFrameGrid.innerHTML = '';
+        outerFrames.forEach((frame, index) => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'frame-item' + (index === 0 ? ' selected' : '');
+
+          const thumb = document.createElement('div');
+          thumb.className = 'frame-thumb';
+
+          const img = document.createElement('img');
+          img.src = frame.bottom; // 用底框當縮圖就好
+          img.alt = frame.label;
+
+          thumb.appendChild(img);
+          btn.appendChild(thumb);
+          outerFrameGrid.appendChild(btn);
+
+          btn.addEventListener('click', () => {
+            document
+              .querySelectorAll('#outerFrameGrid .frame-item')
+              .forEach(b => b.classList.remove('selected'));
+            btn.classList.add('selected');
+            selectedOuterFrame = frame;
+            updateFramedImage(); // 切換外框時即時重算 1280x1000
+          });
+
+          if (index === 0) {
+            selectedOuterFrame = frame;
+          }
+        });
+      }
+
+      /* ========== 相機 ========== */
       async function startCamera() {
         try {
           stream = await navigator.mediaDevices.getUserMedia({
@@ -384,7 +505,6 @@
         }
       }
 
-      // 倒數
       function startCountdown(onFinish) {
         if (!countdownSeconds || countdownSeconds <= 0) {
           onFinish();
@@ -409,7 +529,7 @@
         }, 1000);
       }
 
-      // 把 dataURL 丟到後端，換成網址
+      /* ========== 上傳圖片到後端（給 QR 用） ========== */
       async function uploadImageToServer(dataUrl) {
         try {
           const res = await fetch('/api/upload-image', {
@@ -417,13 +537,9 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ imageData: dataUrl })
           });
-          if (!res.ok) {
-            throw new Error('上傳失敗');
-          }
+          if (!res.ok) throw new Error('上傳失敗');
           const json = await res.json();
-          // 後端回傳的是像 /uploads/xxx.jpg → 要組成完整網址
-          const absoluteUrl = window.location.origin + json.url;
-          return absoluteUrl;
+          return window.location.origin + json.url; // 例如 https://xxx.onrender.com/uploads/xxx.jpg
         } catch (err) {
           console.error('上傳圖片失敗：', err);
           alert('上傳圖片到伺服器失敗，qrcode 可能無法使用。');
@@ -431,95 +547,127 @@
         }
       }
 
-      // 拍照 + 合成（固定 1280×720）
+      /* ========== 拍照：產生 1280×720（含角色邊框） ========== */
       async function capturePhoto() {
         if (!video.videoWidth || !video.videoHeight) {
           alert('相機尚未準備好，請稍等一秒再試。');
           return;
         }
 
-        const canvasWidth = 1280;
-        const canvasHeight = 720; // 16:9
-
-        finalCanvas.width = canvasWidth;
-        finalCanvas.height = canvasHeight;
+        baseCanvas.width = PHOTO_W;
+        baseCanvas.height = PHOTO_H;
 
         // 暫存 canvas，先做裁切（cover）
         const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = canvasWidth;
-        tempCanvas.height = canvasHeight;
+        tempCanvas.width = PHOTO_W;
+        tempCanvas.height = PHOTO_H;
         const tctx = tempCanvas.getContext('2d');
 
         const videoRatio = video.videoWidth / video.videoHeight;
-        const canvasRatio = canvasWidth / canvasHeight;
+        const canvasRatio = PHOTO_W / PHOTO_H;
 
         let sx, sy, sWidth, sHeight;
         if (videoRatio > canvasRatio) {
-          // 影片比較寬，裁左右
           sHeight = video.videoHeight;
           sWidth = sHeight * canvasRatio;
           sx = (video.videoWidth - sWidth) / 2;
           sy = 0;
         } else {
-          // 影片比較窄，裁上下
           sWidth = video.videoWidth;
           sHeight = sWidth / canvasRatio;
           sx = 0;
           sy = (video.videoHeight - sHeight) / 2;
         }
 
-        tctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, canvasWidth, canvasHeight);
+        tctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, PHOTO_W, PHOTO_H);
 
-        const ctx = finalCanvas.getContext('2d');
-        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+        const bctx = baseCanvas.getContext('2d');
+        bctx.clearRect(0, 0, PHOTO_W, PHOTO_H);
 
-        // 在最終 canvas 上做左右鏡像（讓輸出跟預覽一樣）
-        ctx.save();
-        ctx.translate(canvasWidth, 0);
-        ctx.scale(-1, 1);
-        ctx.drawImage(tempCanvas, 0, 0, canvasWidth, canvasHeight);
-        ctx.restore();
+        // 在 baseCanvas 上做左右鏡像
+        bctx.save();
+        bctx.translate(PHOTO_W, 0);
+        bctx.scale(-1, 1);
+        bctx.drawImage(tempCanvas, 0, 0, PHOTO_W, PHOTO_H);
+        bctx.restore();
 
-        // 疊上邊框
+        // 疊上「角色邊框」
         try {
           const frameImg = await loadImage(framePath);
-          ctx.drawImage(frameImg, 0, 0, canvasWidth, canvasHeight);
+          bctx.drawImage(frameImg, 0, 0, PHOTO_W, PHOTO_H);
         } catch (err) {
-          console.error('載入邊框失敗：', err);
-          alert('載入邊框失敗，請確認檔案路徑。');
+          console.error('載入角色邊框失敗：', err);
         }
 
-        // 匯出 dataURL（大圖）＋ 上傳到後端拿網址
         try {
-          const dataUrl = finalCanvas.toDataURL('image/jpeg', 0.9);
-          lastPhotoDataUrl = dataUrl;
+          basePhotoDataUrl = baseCanvas.toDataURL('image/jpeg', 0.9);
+        } catch (e) {
+          console.error('匯出 base 圖片失敗：', e);
+          alert('瀏覽器阻擋了圖片匯出，請確認不是用 file:// 開啟。');
+          return;
+        }
 
-          // 1) 本機下載用
-          downloadLink.href = dataUrl;
+        // 有 base 圖片後，開啟外框選擇 + 合成 1280x1000
+        outerFrameSection.classList.remove('hidden');
+        await updateFramedImage();
+
+        statusText.textContent = '已拍照完成，可以選擇外框，或按「重拍」再試一次。';
+        shootBtn.disabled = false;
+        retakeBtn.disabled = false;
+      }
+
+      /* ========== 三層合成：底框 → base 照片 → 頂框，得到 1280×1000 ========== */
+      async function updateFramedImage() {
+        if (!basePhotoDataUrl || !selectedOuterFrame) return;
+
+        finalCanvas.width = FINAL_W;
+        finalCanvas.height = FINAL_H;
+
+        const ctx = finalCanvas.getContext('2d');
+        ctx.clearRect(0, 0, FINAL_W, FINAL_H);
+
+        try {
+          // 底框（圖二）
+          const bottomImg = await loadImage(selectedOuterFrame.bottom);
+          ctx.drawImage(bottomImg, 0, 0, FINAL_W, FINAL_H);
+
+          // 原始照片（1280x720 + 角色邊框）
+          const photoImg = await loadImage(basePhotoDataUrl);
+          ctx.drawImage(
+            photoImg,
+            PHOTO_X_ON_FINAL,
+            PHOTO_Y_ON_FINAL,
+            PHOTO_W,
+            PHOTO_H
+          );
+
+          // 頂框（圖一）
+          const topImg = await loadImage(selectedOuterFrame.top);
+          ctx.drawImage(topImg, 0, 0, FINAL_W, FINAL_H);
+
+          // 匯出最終 1280x1000 圖片
+          const framedDataUrl = finalCanvas.toDataURL('image/jpeg', 0.9);
+
+          // 下載按鈕
+          downloadLink.href = framedDataUrl;
           downloadLink.classList.remove('hidden');
 
-          // 2) 上傳到後端，取得網址（給 QR 用）
-          lastPhotoUrlForQr = await uploadImageToServer(dataUrl);
-
-          // 有網址才顯示 QR 按鈕
+          // 上傳到後端，取得雲端網址，給 QR 用
+          lastPhotoUrlForQr = await uploadImageToServer(framedDataUrl);
           if (lastPhotoUrlForQr) {
             qrBtn.classList.remove('hidden');
             qrWrapper.classList.add('hidden');
             qrcodeEl.innerHTML = '';
           }
-
-        } catch (e) {
-          console.error('toDataURL 出錯：', e);
-          alert('瀏覽器阻擋了圖片匯出。請確認不是用 file:// 開啟。');
+        } catch (err) {
+          console.error('合成外框失敗：', err);
+          alert('合成外框時發生錯誤，請稍後再試。');
         }
+      } 
 
-        statusText.textContent = '已拍照完成，可以下載，或按「重拍」再試一次。';
-        shootBtn.disabled = false;
-        retakeBtn.disabled = false;
-      }
-
-      // 事件綁定
+      /* ========== 初始化 & 事件綁定 ========== */
       renderFrameGrid();
+      renderOuterFrameGrid();
 
       startBtn.addEventListener('click', () => { startCamera(); });
 
@@ -530,21 +678,19 @@
         e.target.classList.add('active');
       });
 
-      // 拍照
       shootBtn.addEventListener('click', () => {
         startCountdown(() => { capturePhoto(); });
       });
 
-      // 重拍：自動重新倒數 + 拍照
       retakeBtn.addEventListener('click', () => {
         statusText.textContent = '準備重拍，倒數結束後會自動拍照。';
         startCountdown(() => { capturePhoto(); });
       });
 
-      // qrcode下載：用後端回傳的圖片網址生成 QR
+      // qrcode下載：產生指向雲端 1280x1000 圖片的 QR
       qrBtn.addEventListener('click', () => {
         if (!lastPhotoUrlForQr) {
-          alert('圖片網址尚未準備好，請再試一次或重新拍照。');
+          alert('圖片網址還沒準備好，請稍後再試或重新拍照。');
           return;
         }
         try {
