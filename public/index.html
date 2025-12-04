@@ -368,15 +368,26 @@
       let selectedOuterFrame = null;   // { bottom, top, label }
       let lastPhotoUrlForQr = '';      // 雲端 1280x1000 的網址
 
-      const PHOTO_W = 1280;
-      const PHOTO_H = 720;
+      // 原始拍照 + 角色邊框 的尺寸
+      const BASE_W = 1280;
+      const BASE_H = 720;
+
+      // 最終輸出尺寸
       const FINAL_W = 1280;
       const FINAL_H = 1000;
 
-      // 在最終畫布裡照片要放的位置（你可以微調這兩個數字）
-      const PHOTO_X_ON_FINAL = 0;
-      const PHOTO_Y_ON_FINAL = 140; // 140 + 720 = 860，下面留 140px 給標語 / logo
+      // 照片貼到外框中的尺寸（你說的是 1130 x 636）
+      const PHOTO_DRAW_W = 1080;
+      const PHOTO_DRAW_H = 636;
 
+      // 照片在 1280x1000 畫布上的位置：x, y
+      // 水平置中 ⇒ (1280 - 1130) / 2 = 75
+      const PHOTO_X_ON_FINAL = 95; // 75
+
+      // 垂直位置我先幫你抓個大約值，照片會落在中間偏上
+      // 如果之後覺得太高／太低，可以自己微調這個數字就好
+      const PHOTO_Y_ON_FINAL = 95;
+      
       /* 角色邊框（跟你原本的一樣） */
       const frames = [
         { src: 'frames/frame1.png', label: '角色 1' },
@@ -554,17 +565,17 @@
           return;
         }
 
-        baseCanvas.width = PHOTO_W;
-        baseCanvas.height = PHOTO_H;
+        baseCanvas.width = BASE_W;
+        baseCanvas.height = BASE_H;
 
         // 暫存 canvas，先做裁切（cover）
         const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = PHOTO_W;
-        tempCanvas.height = PHOTO_H;
+        tempCanvas.width = BASE_W;
+        tempCanvas.height = BASE_H;
         const tctx = tempCanvas.getContext('2d');
 
         const videoRatio = video.videoWidth / video.videoHeight;
-        const canvasRatio = PHOTO_W / PHOTO_H;
+        const canvasRatio = BASE_W / BASE_H;
 
         let sx, sy, sWidth, sHeight;
         if (videoRatio > canvasRatio) {
@@ -579,22 +590,22 @@
           sy = (video.videoHeight - sHeight) / 2;
         }
 
-        tctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, PHOTO_W, PHOTO_H);
+        tctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, BASE_W, BASE_H);
 
         const bctx = baseCanvas.getContext('2d');
-        bctx.clearRect(0, 0, PHOTO_W, PHOTO_H);
+        bctx.clearRect(0, 0, BASE_W, BASE_H);
 
         // 在 baseCanvas 上做左右鏡像
         bctx.save();
-        bctx.translate(PHOTO_W, 0);
+        bctx.translate(BASE_W, 0);
         bctx.scale(-1, 1);
-        bctx.drawImage(tempCanvas, 0, 0, PHOTO_W, PHOTO_H);
+        bctx.drawImage(tempCanvas, 0, 0, BASE_W, BASE_H);
         bctx.restore();
 
         // 疊上「角色邊框」
         try {
           const frameImg = await loadImage(framePath);
-          bctx.drawImage(frameImg, 0, 0, PHOTO_W, PHOTO_H);
+          bctx.drawImage(frameImg, 0, 0, BASE_W, BASE_H);
         } catch (err) {
           console.error('載入角色邊框失敗：', err);
         }
@@ -617,6 +628,8 @@
       }
 
       /* ========== 三層合成：底框 → base 照片 → 頂框，得到 1280×1000 ========== */
+      // 三層合成：底框（圖一）→ 縮小後的照片（1130x636）→ 頂框（圖二）
+      // 最終得到 1280x1000
       async function updateFramedImage() {
         if (!basePhotoDataUrl || !selectedOuterFrame) return;
 
@@ -627,32 +640,38 @@
         ctx.clearRect(0, 0, FINAL_W, FINAL_H);
 
         try {
-          // 底框（圖二）
+          // 1. 畫底框（圖一：outer_dark_bottom 之類）
           const bottomImg = await loadImage(selectedOuterFrame.bottom);
+          // 不管原始尺寸是多少，都縮放成 1280x1000
           ctx.drawImage(bottomImg, 0, 0, FINAL_W, FINAL_H);
 
-          // 原始照片（1280x720 + 角色邊框）
+          // 2. 畫照片（圖三）：從 base 1280x720 等比例縮到 1130x636
           const photoImg = await loadImage(basePhotoDataUrl);
+
+          // 用 drawImage 的 9 參數版本：先指定 source，再指定 destination
           ctx.drawImage(
             photoImg,
+            // source 區域（從整張 base 取）
+            0, 0, BASE_W, BASE_H,
+            // destination 區域（貼到 final 上的位置與大小）
             PHOTO_X_ON_FINAL,
             PHOTO_Y_ON_FINAL,
-            PHOTO_W,
-            PHOTO_H
+            PHOTO_DRAW_W,
+            PHOTO_DRAW_H
           );
 
-          // 頂框（圖一）
+          // 3. 畫頂框（圖二：outer_dark_top 之類）
           const topImg = await loadImage(selectedOuterFrame.top);
           ctx.drawImage(topImg, 0, 0, FINAL_W, FINAL_H);
 
-          // 匯出最終 1280x1000 圖片
+          // 4. 匯出最終 1280x1000 圖片
           const framedDataUrl = finalCanvas.toDataURL('image/jpeg', 0.9);
 
-          // 下載按鈕
+          // 下載按鈕：下載的是 1280x1000
           downloadLink.href = framedDataUrl;
           downloadLink.classList.remove('hidden');
 
-          // 上傳到後端，取得雲端網址，給 QR 用
+          // 如果你有雲端＋QR code，就把 framedDataUrl 上傳
           lastPhotoUrlForQr = await uploadImageToServer(framedDataUrl);
           if (lastPhotoUrlForQr) {
             qrBtn.classList.remove('hidden');
